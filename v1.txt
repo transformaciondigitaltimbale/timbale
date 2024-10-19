@@ -1,0 +1,95 @@
+import uvicorn
+from fastapi import FastAPI, HTTPException
+import requests
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+app = FastAPI()
+
+SIIGO_API_URL = "https://api.siigo.com/v1"
+SIIGO_AUTH_URL = f"{SIIGO_API_URL}/auth"
+
+def get_siigo_token():
+    auth_data = {
+        "username": "sandbox@siigoapi.com",
+        "password": "111111"
+    }
+    response = requests.post(SIIGO_AUTH_URL, json=auth_data)
+    if response.status_code == 200:
+        return response.json()["access_token"]
+    else:
+        raise HTTPException(status_code=401, detail="No se pudo autenticar con Siigo API")
+
+def create_siigo_customer(customer_data, token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    response = requests.post(f"{SIIGO_API_URL}/customers", json=customer_data, headers=headers)
+    if response.status_code == 201:
+        return response.json()
+    else:
+        raise HTTPException(status_code=response.status_code, detail="Error al crear el cliente en Siigo")
+
+def send_email(to_email, subject, body):
+    # Configura aquí tus credenciales de correo electrónico
+    smtp_server = "smtp.tuservidor.com"
+    smtp_port = 587
+    smtp_username = "tu_correo@ejemplo.com"
+    smtp_password = "tu_contraseña"
+
+    msg = MIMEMultipart()
+    msg['From'] = smtp_username
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Error al enviar el correo: {str(e)}")
+        return False
+
+@app.post("/create_user")
+async def create_user(user_data: dict):
+    try:
+        # Obtener token de Siigo
+        token = get_siigo_token()
+
+        # Crear cliente en Siigo
+        customer_data = {
+            "type": "Customer",
+            "person_type": "Person",
+            "id_type": "13",
+            "identification": user_data["identification"],
+            "name": [user_data["first_name"], user_data["last_name"]],
+            "commercial_name": f"{user_data['first_name']} {user_data['last_name']}",
+            "email": user_data["email"],
+            "phone": user_data.get("phone", ""),
+            "address": user_data.get("address", ""),
+            "city": user_data.get("city", "")
+        }
+        siigo_customer = create_siigo_customer(customer_data, token)
+
+        # Enviar correo electrónico de confirmación
+        email_subject = "Bienvenido a nuestro servicio"
+        email_body = f"Hola {user_data['first_name']},\n\nTu cuenta ha sido creada exitosamente. Tu ID de cliente es {siigo_customer['id']}."
+        email_sent = send_email(user_data["email"], email_subject, email_body)
+
+        if email_sent:
+            return {"message": "Usuario creado y correo enviado exitosamente", "siigo_customer_id": siigo_customer['id']}
+        else:
+            return {"message": "Usuario creado, pero hubo un problema al enviar el correo", "siigo_customer_id": siigo_customer['id']}
+
+    except HTTPException as http_ex:
+        raise http_ex
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error interno del servidor: {str(e)}")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

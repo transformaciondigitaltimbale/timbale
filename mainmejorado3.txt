@@ -1,0 +1,131 @@
+Manejo de errores de autenticación de Siigo:
+
+async def get_siigo_token(client: httpx.AsyncClient):
+    headers = {
+        "Authorization": f"Basic {os.getenv('SIIGO_API_TOKEN')}",
+        "Content-Type": "application/json",
+        "Partner-Id": os.getenv('SIIGO_PARTNER_ID')
+    }
+    auth_data = {
+        "username": os.getenv('SIIGO_API_USERNAME')
+    }
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await client.post(SIIGO_AUTH_URL, json=auth_data, headers=headers)
+            response.raise_for_status()
+            token_data = response.json()
+            if "access_token" not in token_data:
+                raise HTTPException(status_code=401, detail="Token de acceso no encontrado en la respuesta")
+            return token_data["access_token"]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                raise HTTPException(status_code=401, detail="Credenciales de Siigo inválidas")
+            elif e.response.status_code == 403:
+                raise HTTPException(status_code=403, detail="No tiene permisos para acceder a la API de Siigo")
+            elif attempt == MAX_RETRIES - 1:
+                raise HTTPException(status_code=500, detail=f"No se pudo autenticar con Siigo API después de {MAX_RETRIES} intentos")
+            await asyncio.sleep(RETRY_DELAY)
+        except httpx.RequestError as e:
+            if attempt == MAX_RETRIES - 1:
+                raise HTTPException(status_code=500, detail=f"Error de conexión con Siigo API: {str(e)}")
+            await asyncio.sleep(RETRY_DELAY)
+
+
+
+
+_________________________________________________________________________________________
+Manejo de errores específicos de Siigo en la creación de clientes:
+async def create_siigo_customer(customer_data: dict, token: str, client: httpx.AsyncClient):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Partner-Id": os.getenv('SIIGO_PARTNER_ID'),
+        "idempotency-key": str(uuid.uuid4())
+    }
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await client.post(f"{SIIGO_API_URL}/customers", json=customer_data, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            error_data = e.response.json()
+            if e.response.status_code == 400:
+                raise HTTPException(status_code=400, detail=f"Error en los datos del cliente: {error_data.get('message', str(e))}")
+            elif e.response.status_code == 401:
+                raise HTTPException(status_code=401, detail="Token de Siigo inválido o expirado")
+            elif e.response.status_code == 403:
+                raise HTTPException(status_code=403, detail="No tiene permisos para crear clientes en Siigo")
+            elif e.response.status_code == 429:
+                retry_after = int(e.response.headers.get("Retry-After", RETRY_DELAY))
+                await asyncio.sleep(retry_after)
+            elif attempt == MAX_RETRIES - 1:
+                raise HTTPException(status_code=500, detail=f"Error al crear cliente en Siigo después de {MAX_RETRIES} intentos: {error_data.get('message', str(e))}")
+            else:
+                await asyncio.sleep(RETRY_DELAY)
+        except httpx.RequestError as e:
+            if attempt == MAX_RETRIES - 1:
+                raise HTTPException(status_code=500, detail=f"Error de conexión con Siigo API: {str(e)}")
+            await asyncio.sleep(RETRY_DELAY)
+
+
+
+
+________________________________________________________________
+Implementación de la función para enviar mensajes de WhatsApp:
+
+async def send_whatsapp_message(phone: str, message: str):
+    url = f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION')}/{os.getenv('WHATSAPP_PHONE_NUMBER_ID')}/messages"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('WHATSAPP_ACCESS_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": message}
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            error_data = e.response.json()
+            error_code = error_data.get("error", {}).get("code")
+            if error_code == 100:
+                raise HTTPException(status_code=400, detail="Parámetro inválido en la solicitud de WhatsApp")
+            elif error_code == 130:
+                raise HTTPException(status_code=403, detail="No tiene permisos para enviar mensajes de WhatsApp")
+            elif error_code == 131:
+                raise HTTPException(status_code=400, detail="Número de teléfono de WhatsApp no válido")
+            elif error_code == 133:
+                raise HTTPException(status_code=400, detail="Plantilla de mensaje de WhatsApp no válida")
+            else:
+                raise HTTPException(status_code=500, detail=f"Error al enviar mensaje de WhatsApp: {error_data.get('error', {}).get('message', str(e))}")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=500, detail=f"Error de conexión con la API de WhatsApp: {str(e)}")
+
+
+__________________________________________________________________________________________-
+mplementación de un sistema de monitoreo de estado de la API de WhatsApp:
+@app.post("/register-from-timbale")
+async def register_from_timbale(user_data: UserRegistration, background_tasks: BackgroundTasks):
+    try:
+        async with httpx.AsyncClient() as client:
+            result = await process_registration(user_data, client)
+
+        whatsapp_message = f"Hola {user_data.first_name}, Estamos Felices de que ahora haces Parte de la Familia Timbale, Tu registro fue exitoso."
+        try:
+            await send_whatsapp_message(user_data.phone, whatsapp_message)
+        except HTTPException as whatsapp_error:
+            print(f"Error al enviar mensaje de WhatsApp: {whatsapp_error.detail}")
+            # Aquí podrías implementar un sistema de reintentos o notificación al administrador
+
+        return result
+    except SiigoAPIError as e:
+        raise HTTPException(status_code=500, detail=f"Error al crear el cliente en Siigo: {str(e)}")
+    except EmailError as e:
+        raise HTTPException(status_code=500, detail=f"Error al enviar el correo electrónico: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error inesperado: {str(e)}")

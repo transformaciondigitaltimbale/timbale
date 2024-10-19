@@ -1,0 +1,2 @@
+class WhatsappAPIError(Exception):
+    pass

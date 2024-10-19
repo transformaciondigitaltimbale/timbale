@@ -1,0 +1,2 @@
+class EmailAPIError(Exception):
+    pass

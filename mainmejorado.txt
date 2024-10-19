@@ -1,0 +1,13 @@
+Explicación de los cambios y consideraciones:
+1. Códigos de estado HTTP y Manejo de errores: Se ha implementado un manejador de excepciones personalizado para HTTPException que devuelve respuestas JSON con códigos de error específicos.
+2. Límite de solicitudes: Se ha añadido un sistema de reintentos con retraso exponencial para manejar los límites de solicitudes (código 429).
+3. Tiempos de respuesta: Se ha implementado un sistema de reintentos para manejar posibles tiempos de espera o errores de red.
+4. Partner-Id: Se ha añadido el encabezado Partner-Id a todas las solicitudes a la API de Siigo.
+5. Idempotencia: Se ha añadido un encabezado Idempotency-Key para la creación de clientes, utilizando UUID para generar claves únicas.
+6. Bloqueo de usuarios: Se manejan los códigos de error 401 y 403 que podrían indicar problemas de autenticación o autorización.
+7. Códigos de error: Se han manejado varios códigos de error específicos (400, 401, 403, 404, 500) y se devuelven mensajes de error más detallados.
+8. Facturación Electrónica: Aunque no se implementa directamente en este código, la estructura permite fácilmente añadir funcionalidades relacionadas con la facturación electrónica en el futuro.
+
+Este código es más robusto y maneja mejor los posibles errores y limitaciones de la API de Siigo. Sin embargo, ten en cuenta que algunas partes del código original (como las funciones relacionadas con Google Sheets y el envío de correos electrónicos) se han mantenido sin cambios, ya que el enfoque principal era la interacción con la API de Siigo.
+
+Recuerda reemplazar "Tu-Partner-Id" con tu Partner-Id real proporcionado por Siigo. También, asegúrate de manejar de forma segura las credenciales y tokens en un entorno de producción.
